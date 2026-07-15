@@ -90,12 +90,18 @@ def login():
     return _credential_login()
 
 
-def safe_get(fn, *args, **kwargs):
-    try:
-        return fn(*args, **kwargs)
-    except Exception as e:
-        print(f"  (warning: could not fetch {fn.__name__}: {e})")
-        return None
+def safe_get(fn, *args, retries=3, **kwargs):
+    for attempt in range(retries):
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:
+            if "429" in str(e) and attempt < retries - 1:
+                wait = 5 * (attempt + 1)
+                print(f"  (rate limited fetching {fn.__name__}, waiting {wait}s...)")
+                time.sleep(wait)
+                continue
+            print(f"  (warning: could not fetch {fn.__name__}: {e})")
+            return None
 
 
 def fmt_minutes(seconds):
@@ -268,17 +274,32 @@ def sync(days):
     today = date.today()
 
     print(f"\nFetching activities from the last {days} day(s)...")
-    activities = safe_get(api.get_activities, 0, 50) or []
     cutoff = today - timedelta(days=days)
     recent_activities = []
-    for a in activities:
-        start_time = a.get("startTimeLocal", "")
-        try:
-            a_date = date.fromisoformat(start_time.split(" ")[0])
-        except ValueError:
-            continue
-        if a_date >= cutoff:
-            recent_activities.append(a)
+    page_size = 100
+    start = 0
+    for _page in range(200):  # hard cap: 20,000 activities
+        batch = safe_get(api.get_activities, start, page_size) or []
+        if not batch:
+            break
+        reached_cutoff = False
+        for a in batch:
+            start_time = a.get("startTimeLocal", "")
+            try:
+                a_date = date.fromisoformat(start_time.split(" ")[0])
+            except ValueError:
+                continue
+            if a_date >= cutoff:
+                recent_activities.append(a)
+            else:
+                # get_activities returns newest-first, so once we're past the
+                # cutoff every remaining activity (this page and beyond) is too.
+                reached_cutoff = True
+                break
+        if reached_cutoff or len(batch) < page_size:
+            break
+        start += page_size
+        time.sleep(0.3)
 
     print(f"Found {len(recent_activities)} activities in range.")
     for a in recent_activities:
@@ -299,6 +320,12 @@ def sync(days):
             "readiness": safe_get(api.get_training_readiness, day_str),
         }
         write_wellness_note(day_str, wellness, all_data)
+        if i % 10 == 9:
+            # Periodically flush progress to disk so a long backfill isn't
+            # all-or-nothing if it gets interrupted partway through.
+            with open(DATA_JSON_PATH, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, indent=2, default=str)
+        time.sleep(0.2)
 
     with open(DATA_JSON_PATH, "w", encoding="utf-8") as f:
         json.dump(all_data, f, indent=2, default=str)
