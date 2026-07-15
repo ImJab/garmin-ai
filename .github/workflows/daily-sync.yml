@@ -2,9 +2,9 @@ name: Daily Garmin Sync
 
 on:
   schedule:
-    # 11:00 UTC daily (~6am US Eastern / 3am US Pacific). Edit the cron line
-    # below and change the time to whatever suits your morning.
-    - cron: "0 11 * * *"
+    # 15:00 UTC = 8:00am Phoenix time (Arizona stays on MST/UTC-7 year-round,
+    # no daylight saving, so this offset never needs to change).
+    - cron: "0 15 * * *"
   workflow_dispatch: {}
 
 permissions:
