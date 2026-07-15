@@ -8,4 +8,4 @@
 - Max heart rate: 154.0 bpm
 - Calories: 424.0
 - Average speed: 7.70 m/s
-- Aerobic training effect: 2.299999952316284
+- Aerobic training effect: 2.3
