@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   sync:
@@ -31,12 +32,79 @@ jobs:
           GARMIN_TOKEN_JSON: ${{ secrets.GARMIN_TOKEN_JSON }}
 
       - name: Sync Garmin data
+        id: sync
+        continue-on-error: true
         run: python sync_garmin.py --days 2
 
       - name: Commit updated data
+        if: steps.sync.outcome == 'success'
         run: |
           git config user.name "garmin-sync-bot"
           git config user.email "actions@users.noreply.github.com"
           git add garmin/
           git diff --cached --quiet || git commit -m "Daily Garmin data sync"
           git push
+
+      - name: Open an issue if the sync failed
+        if: steps.sync.outcome == 'failure'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const title = "Garmin sync is broken - session token expired";
+            const {data: existing} = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "garmin-sync-failure",
+            });
+            if (existing.length > 0) return; // already flagged, don't spam
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title,
+              labels: ["garmin-sync-failure"],
+              body: [
+                "The daily Garmin sync failed, most likely because the saved",
+                "session token was rejected by Garmin.",
+                "",
+                "To fix it:",
+                "1. Open a terminal on your PC in the `garmin-ai` folder.",
+                "2. Run: `.\\venv\\Scripts\\python.exe manual_login.py`",
+                "3. Log in when prompted. Tell Claude once it says \"Login",
+                "   successful\" so it can push the refreshed token to this",
+                "   repo's GARMIN_TOKEN_JSON secret.",
+                "",
+                "This issue will stay open until the next successful sync",
+                "closes it automatically.",
+              ].join("\n"),
+            });
+
+      - name: Close the failure issue if this run succeeded
+        if: steps.sync.outcome == 'success'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const {data: existing} = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: "open",
+              labels: "garmin-sync-failure",
+            });
+            for (const issue of existing) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: "Synced successfully again - closing.",
+              });
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: "closed",
+              });
+            }
+
+      - name: Fail the run if sync failed
+        if: steps.sync.outcome == 'failure'
+        run: exit 1
